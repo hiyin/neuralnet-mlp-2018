@@ -1,9 +1,7 @@
-
-# coding: utf-8
-
-# In[167]:
-
-
+import h5py
+from scipy import stats
+from sklearn import datasets
+import sklearn.metrics
 import numpy as np
 
 class Softmax:
@@ -85,7 +83,6 @@ class MSE:
         :return: (array)
         """
         return self.prime(y_true, y_pred) * self.activation_fn.prime(y_pred)
- 
 
 class CrossEntropy:
     def __init__(self, activation_fn=Softmax):
@@ -107,6 +104,7 @@ class CrossEntropy:
         #x = Softmax.activation(x)
         predicted_probability = x[np.arange(len(x)), indices]
         log_preds = np.log(predicted_probability)
+        log_preds[np.isnan(log_preds)] = 0     #####
         loss = -1.0 * np.sum(log_preds) / len(log_preds)
         return loss
     
@@ -139,8 +137,33 @@ class NoActivation:
         :return: z': (array)
         """
         return np.ones_like(z)
+    
+    
+    
+class Momentum():       #####
+    
+    def __init__(self, weights, velocity, eta, dw):
+        self.w = weights
+        self.v = velocity
+        self.eta = eta
+        self.dw = dw
+        
+    def update(self):
+        
+        gamma = 0.1
+        
+        self.v = gamma*self.v + self.eta*self.dw
+        self.w -= self.v
+        
+        return self.w, self.v
 
-
+ #   def Nesterov:
+        
+ #       gamma = 0.1
+         
+ #       self.w -= gamma*self.v
+ #       delta = 
+        
 class Network:
     def __init__(self, dimensions, activations, dropout=False, learning_rate_decay=0):
         """
@@ -164,11 +187,13 @@ class Network:
         # Weights and biases are initiated by index. For a one hidden layer net you will have a w[1] and w[2]
         self.w = {}
         self.b = {}
-
+        self.vel = {}     #######
+        
         # Activations are also initiated by index. For the example we will have activations[2] and activations[3]
         self.activations = {}
         for i in range(len(dimensions) - 1):
             self.w[i + 1] = np.random.randn(dimensions[i], dimensions[i + 1]) / np.sqrt(dimensions[i])
+            self.vel[i + 1] = np.random.randn(dimensions[i], dimensions[i + 1]) / np.sqrt(dimensions[i])   #####
             self.b[i + 1] = np.zeros(dimensions[i + 1])
             self.activations[i + 2] = activations[i]
             
@@ -214,7 +239,7 @@ class Network:
 
         return z, a
 
-    def _back_prop(self, z, a, y_true):
+    def _back_prop(self, z, a, y_true, momentum):     ########
         """
         The input dicts keys represent the layers of the net.
         a = { 1: x,
@@ -231,7 +256,6 @@ class Network:
         # delta output layer
         delta = self.loss.delta(y_true, a[self.n_layers])
         dw = np.dot(a[self.n_layers - 1].T, delta)
-
         update_params = {
             self.n_layers - 1: (dw, delta)
         }
@@ -241,24 +265,33 @@ class Network:
         # Each iteration requires the delta from the previous layer, propagating backwards.
         for i in reversed(range(2, self.n_layers)):
             delta = np.dot(delta, self.w[i].T) * self.activations[i].prime(z[i])
-            dw = np.dot(a[i - 1].T, delta)
+            dw = np.dot(a[i - 1].T, delta)  
+
             update_params[i - 1] = (dw, delta)
-
+        
+        
         for k, v in update_params.items():
-            self._update_w_b(k, v[0], v[1])
+            self._update_w_b(k, v[0], v[1], a, z, momentum)     #######
 
-    def _update_w_b(self, index, dw, delta):
+    def _update_w_b(self, index, dw, delta, a, z, momentum):
         """
         Update weights and biases.
         :param index: (int) Number of the layer
         :param dw: (array) Partial derivatives
         :param delta: (array) Delta error.
         """
-
-        self.w[index] -= self.learning_rate * dw
+                
+        if momentum == 'yes':               ########
+            
+            self.w[index], self.vel[index] = Momentum(self.w[index], self.vel[index], self.learning_rate, dw).update()
+            
+        else:
+            
+            self.w[index] -= self.learning_rate * dw
+            
         self.b[index] -= self.learning_rate * np.mean(delta, 0)
 
-    def fit(self, x, y_true, loss, epochs, batch_size, learning_rate, learning_rate_decay):
+    def fit(self, x, y_true, loss, epochs, batch_size, learning_rate, learning_rate_decay, momentum):
         """
         :param x: (array) Containing parameters
         :param y_true: (array) Containing one hot encoded labels.
@@ -267,6 +300,9 @@ class Network:
         :param batch_size: (int) Number of samples in minibatch
         :param learning_rate: (flt)
         """
+        
+        Loss = np.array([])
+        
         if not x.shape[0] == y_true.shape[0]:
             raise ValueError("Length of x and y arrays don't match")
         # Initiate the loss object with the final activation function
@@ -285,14 +321,17 @@ class Network:
                 k = j * batch_size
                 l = (j + 1) * batch_size
                 z, a = self._feed_forward(x_[k:l])
-                self._back_prop(z, a, y_[k:l])
+                self._back_prop(z, a, y_[k:l], momentum)        ############
 
             if (i + 1) % 10 == 0:
                 _, a = self._feed_forward(x)
-                #print("Loss:", self.loss.loss(y_true, a[self.n_layers]))
+                print("Loss:", self.loss.loss(y_true, a[self.n_layers]))
+                Loss = np.append(Loss,self.loss.loss(y_true, a[self.n_layers]))
+                
             # Learning rate decay    
             self.learning_rate = self.learning_rate * (self.learning_rate / (self.learning_rate + (self.learning_rate * self.learning_rate_decay)))
-
+        
+        return Loss
 
     def predict(self, x):
         """
@@ -303,17 +342,16 @@ class Network:
         return a[self.n_layers]
 
 if __name__ == "__main__":
-    from sklearn import datasets
-    import sklearn.metrics
+    
     np.random.seed(1)
     #data = datasets.load_digits()
-    import h5py
-    with h5py.File('/Users/dyin/Desktop/Assignment-1-Dataset/train_128.h5','r') as H: data = np.copy(H['data'])
-    with h5py.File('/Users/dyin/Desktop/Assignment-1-Dataset/train_label.h5','r') as H: label = np.copy(H['label'])
-
-    from scipy import stats
+    
+    with h5py.File('train_128.h5','r') as H: data = np.copy(H['data'])
+    with h5py.File('train_label.h5','r') as H: label = np.copy(H['label'])
+    
     #x = stats.zscore(data)
     #data = (data - data.min()) / (data.max() - data.min())
+    
     x = data[:1000]
     y = label[:1000]
 
@@ -322,8 +360,8 @@ if __name__ == "__main__":
     y = np.eye(10)[y]
 
     
-    nn = Network((128, 96, 54, 10), (Relu, Tanh, Softmax))
-    nn.fit(x, y, loss=CrossEntropy, epochs=2000, batch_size=50, learning_rate=1e-3, learning_rate_decay=0.0001)
+    nn = Network((128, 96, 54, 10), (Relu, Sigmoid, Softmax))
+    Loss = nn.fit(x, y, loss=CrossEntropy, epochs=5000, batch_size=50, learning_rate=2e-3, learning_rate_decay=0.00001, momentum = 'yes')
 
     prediction = nn.predict(x)
 
@@ -334,60 +372,32 @@ if __name__ == "__main__":
         y_true.append(np.argmax(y[i]))
     
     print(sklearn.metrics.classification_report(y_true, y_pred))
-    
-    
-    #Run prediction over all records
-
-    start = 5000  #pic first record from training data for validation
-    end = 60000 ##pic last record from training data for validation
-    x_test = data[start:end]
-    y_test = label[start:end]
-
-    t_results = nn.predict(x_test)
-
-    correct = 0
-    for i in range(len(y_test)):
-        pred = np.argmax(t_results[i])
-        true = y_test[i]
-        if pred == true :
-            correct += 1
-    print('Accuracy = '+ str(correct/len(y_test)*100) + ' of ' + str(len(y_test)) + ' Samples')
-    
-    
-    
-    
-    
-from sklearn.model_selection import KFold # import KFold
-
-kf = KFold(n_splits=10) # Define the split - into 2 folds 
-kf.get_n_splits(x) # returns the number of splitting iterations in the cross-validator
-print(kf) 
-#KFold(n_splits=10, random_state=None, shuffle=False)
-
-for train_indices, test_indices in kf.split(x):
-    nn.fit(x[train_indices], y[train_indices], loss=CrossEntropy, epochs=2000, batch_size=50, learning_rate=1e-3, learning_rate_decay=0.0001)
-    print(nn.score(x[test_indices], y[test_indices]))
-
-
-# In[ ]:
-
-
-from sklearn.model_selection import KFold # import KFold
-
-kf = KFold(n_splits=10) # Define the split - into 2 folds 
-kf.get_n_splits(x) # returns the number of splitting iterations in the cross-validator
-print(kf) 
-KFold(n_splits=10, random_state=None, shuffle=False)
-
-for train_index, test_index in kf.split(X):
-    print(“TRAIN:”, train_index, “TEST:”, test_index)
-    X_train, X_test = X[train_index], X[test_index]
-    y_train, y_test = y[train_index], y[test_index]
 
 
 
-# In[162]:
+import matplotlib.pyplot as pl
+
+e = np.arange(1,len(Loss)+1)
+pl.figure(figsize=(15,4))
+pl.plot(e,Loss)
+pl.grid()
+pl.xlabel('Batches')
+pl.ylabel('Loss')
+
+pl.show()
 
 
+start = 5000  #pic first record from training data for validation
+end = 60000 ##pic last record from training data for validation
+x_test = data[start:end]
+y_test = label[start:end]
 
+t_results = nn.predict(x_test)
 
+correct = 0
+for i in range(len(y_test)):
+    pred = np.argmax(t_results[i])
+    true = y_test[i]
+    if pred == true :
+        correct += 1
+print('Accuracy = {0:0.2f}'.format(correct/len(y_test)*100),'% of ',str(len(y_test)),' Samples')
